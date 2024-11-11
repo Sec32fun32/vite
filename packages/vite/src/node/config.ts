@@ -37,6 +37,7 @@ import { resolveBuildEnvironmentOptions, resolveBuilderOptions } from './build'
 import type { ResolvedServerOptions, ServerOptions } from './server'
 import { resolveServerOptions } from './server'
 import { DevEnvironment } from './server/environment'
+import type { RunnableDevEnvironment } from './server/environments/runnableEnvironment'
 import { createRunnableDevEnvironment } from './server/environments/runnableEnvironment'
 import type { WebSocketServer } from './server/ws'
 import type { PreviewOptions, ResolvedPreviewOptions } from './preview'
@@ -82,7 +83,6 @@ import type { ResolvedSSROptions, SSROptions } from './ssr'
 import { resolveSSROptions } from './ssr'
 import { PartialEnvironment } from './baseEnvironment'
 import { createIdResolver } from './idResolver'
-import { createServerModuleRunner } from './ssr/runtime/serverModuleRunner'
 
 const debug = createDebugger('vite:config', { depth: 10 })
 
@@ -1529,9 +1529,11 @@ export async function loadConfigFromFile(
     return null
   }
 
+  let environment: RunnableDevEnvironment | undefined
+
   try {
     // console.time('config')
-    const environment = new DevEnvironment(
+    environment = createRunnableDevEnvironment(
       'config',
       await resolveConfig({ configFile: false }, 'serve'),
       {
@@ -1541,12 +1543,18 @@ export async function loadConfigFromFile(
             moduleRunnerTransform: true,
           },
         },
+        runnerOptions: {
+          hmr: {
+            logger: false,
+          },
+        },
         hot: false,
       },
     )
     await environment.init()
-    const runner = createServerModuleRunner(environment)
-    const { default: userConfig } = (await runner.import(resolvedPath)) as {
+    const { default: userConfig } = (await environment.runner.import(
+      resolvedPath,
+    )) as {
       default: UserConfigExport
     }
     debug?.(`config file loaded in ${getTime()}`)
@@ -1557,6 +1565,7 @@ export async function loadConfigFromFile(
     if (!isObject(config)) {
       throw new Error(`config must export or return an object.`)
     }
+    await environment.runner.close()
     return {
       path: normalizePath(resolvedPath),
       config,
@@ -1564,6 +1573,7 @@ export async function loadConfigFromFile(
       dependencies: [],
     }
   } catch (e) {
+    await environment?.runner.close()
     createLogger(logLevel, { customLogger }).error(
       colors.red(`failed to load config from ${resolvedPath}`),
       {
